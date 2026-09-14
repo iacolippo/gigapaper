@@ -31,6 +31,9 @@ function open(message, { showInput, defaultValue, hideCancel } = {}) {
   });
 }
 
+/** True while a prompt/confirm/alert is up, so Escape elsewhere stands down. */
+export const isModalOpen = () => !overlay.classList.contains("hidden");
+
 export const showPrompt = (message, defaultValue) => open(message, { showInput: true, defaultValue });
 export const showConfirm = (message) => open(message, { showInput: false });
 export const showAlert = (message) => open(message, { showInput: false, hideCancel: true });

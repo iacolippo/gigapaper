@@ -27,6 +27,41 @@ def test_upload_list_move_delete_paper(client):
     assert client.get("/api/papers").json() == []
 
 
+def test_rename_paper(client):
+    paper = client.post(
+        "/api/papers", files={"file": ("2504.15278v2.pdf", MINIMAL_PDF, "application/pdf")}
+    ).json()
+    assert paper["title"] == "2504.15278v2"
+
+    resp = client.patch(f"/api/papers/{paper['id']}", json={"title": "DRAWER"})
+    assert resp.status_code == 200
+    assert resp.json()["title"] == "DRAWER"
+    assert client.get("/api/papers").json()[0]["title"] == "DRAWER"
+
+
+def test_reading_position_is_remembered(client):
+    paper = client.post(
+        "/api/papers", files={"file": ("A Paper.pdf", MINIMAL_PDF, "application/pdf")}
+    ).json()
+    assert paper["last_page"] is None and paper["last_offset"] is None
+
+    resp = client.patch(f"/api/papers/{paper['id']}", json={"last_page": 7, "last_offset": 0.25})
+    assert resp.status_code == 200
+    assert (resp.json()["last_page"], resp.json()["last_offset"]) == (7, 0.25)
+
+    # it comes back with the listing, which is where the viewer reads it from
+    listed = client.get("/api/papers").json()[0]
+    assert (listed["last_page"], listed["last_offset"]) == (7, 0.25)
+
+    # an offset outside the page is clamped rather than stored as-is
+    resp = client.patch(f"/api/papers/{paper['id']}", json={"last_page": 2, "last_offset": 1.8})
+    assert (resp.json()["last_page"], resp.json()["last_offset"]) == (2, 1.0)
+
+    # and an unrelated edit leaves the position alone
+    resp = client.patch(f"/api/papers/{paper['id']}", json={"read": True})
+    assert resp.json()["last_page"] == 2
+
+
 def test_reject_non_pdf_upload(client):
     resp = client.post("/api/papers", files={"file": ("notes.txt", b"hello", "text/plain")})
     assert resp.status_code == 400

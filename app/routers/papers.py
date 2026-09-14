@@ -105,6 +105,9 @@ def update_paper(paper_id: int, payload: PaperUpdate, db: Session = Depends(get_
         paper.folder_id = payload.folder_id
     if payload.read is not None:
         paper.read_at = datetime.now(UTC) if payload.read else None
+    if payload.last_page is not None:
+        paper.last_page = payload.last_page
+        paper.last_offset = min(max(payload.last_offset or 0.0, 0.0), 1.0)
     db.commit()
     db.refresh(paper)
     return paper

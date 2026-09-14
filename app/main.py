@@ -1,10 +1,9 @@
-from pathlib import Path
-
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Base, engine, ensure_schema, migrate_legacy_comments
+from app.paths import resource_dir
 from app.routers import folders, highlights, papers, snapshots
 
 Base.metadata.create_all(bind=engine)
@@ -39,5 +38,5 @@ app.include_router(papers.router)
 app.include_router(highlights.router)
 app.include_router(snapshots.router)
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_DIR = resource_dir() / "static"
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

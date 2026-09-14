@@ -15,8 +15,13 @@ dependencies = [
     "markdown>=3.6",
 ]
 
+[project.scripts]
+gigapaper = "app.desktop:main"
+
 [project.optional-dependencies]
 snapshots = ["playwright>=1.40"]
+desktop = ["pywebview>=5.0"]
+build = ["pywebview>=5.0", "pyinstaller>=6.6"]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",

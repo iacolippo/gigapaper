@@ -4,7 +4,9 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-DATA_DIR = Path(os.environ.get("GIGAPAPER_DATA_DIR", Path(__file__).resolve().parent.parent / "storage"))
+from app.paths import default_data_dir
+
+DATA_DIR = Path(os.environ.get("GIGAPAPER_DATA_DIR", default_data_dir()))
 PDF_DIR = DATA_DIR / "pdfs"
 DOC_DIR = DATA_DIR / "docs"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"
@@ -43,6 +45,8 @@ def ensure_schema() -> None:
         "kind": "ALTER TABLE papers ADD COLUMN kind VARCHAR(16) DEFAULT 'pdf' NOT NULL",
         "source_url": "ALTER TABLE papers ADD COLUMN source_url VARCHAR(2000)",
         "read_at": "ALTER TABLE papers ADD COLUMN read_at DATETIME",
+        "last_page": "ALTER TABLE papers ADD COLUMN last_page INTEGER",
+        "last_offset": "ALTER TABLE papers ADD COLUMN last_offset FLOAT",
     }
     with engine.begin() as conn:
         tables = conn.execute(

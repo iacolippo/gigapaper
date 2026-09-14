@@ -3,8 +3,15 @@ __pycache__/
 *.py[cod]
 .venv/
 *.egg-info/
+
+# PyInstaller — the Gigapaper.app bundle and its intermediates, rebuilt by
+# ./build_app.sh. The spec and assets/gigapaper.icns are source and stay in.
 build/
 dist/
+
+# Local environment overrides (GIGAPAPER_DATA_DIR, GIGAPAPER_DATABASE_URL).
+.env
+.env.*
 
 # Tooling caches
 .pytest_cache/

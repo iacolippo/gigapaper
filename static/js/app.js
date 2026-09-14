@@ -1,7 +1,8 @@
 import { api } from "./api.js";
-import { renderPdf, renderArticle } from "./viewer.js";
-import { showPrompt, showConfirm, showAlert } from "./modal.js";
+import { renderPdf, renderArticle, DEFAULT_SCALE } from "./viewer.js";
+import { showPrompt, showConfirm, showAlert, isModalOpen } from "./modal.js";
 import { getThumbnail, forgetThumbnail } from "./thumbnails.js";
+import { guessTitle } from "./pdftitle.js";
 
 const folderListEl = document.getElementById("folder-list");
 const paperListEl = document.getElementById("paper-list");
@@ -28,12 +29,16 @@ const originalFrameEl = document.getElementById("original-frame");
 const notesToggleBtn = document.getElementById("notes-toggle");
 const readToggleBtn = document.getElementById("read-toggle");
 const readToggleTextEl = document.getElementById("read-toggle-text");
+const mainEl = document.getElementById("main");
+const zoomEl = document.getElementById("zoom");
+const zoomLevelEl = document.getElementById("zoom-level");
 
 const state = {
   folders: [], papers: [], currentFolderId: null, currentPaper: null,
   highlights: [], pendingSelection: null, editingHighlight: null, editingComment: null,
   viewerHandle: null, notesVisible: readNotesPreference(),
   paperFilter: readFilterPreference(), viewMode: "reader",
+  zoom: readZoomPreference(), pendingRestore: null,
 };
 
 /**
@@ -62,6 +67,8 @@ function setViewMode(mode) {
   for (const button of viewModeEl.querySelectorAll("button")) {
     button.setAttribute("aria-pressed", String(button.dataset.mode === state.viewMode));
   }
+
+  renderZoom();
 
   if (state.viewMode === "original") {
     closePopover();
@@ -95,6 +102,113 @@ function readFilterPreference() {
   } catch {
     return "all";
   }
+}
+
+/**
+ * Zoom is kept as a multiple of the reader's natural size, so the readout says
+ * 100% at the size the pages were always drawn at rather than the 140% that
+ * PDF.js scale happens to be.
+ */
+const ZOOM_STEPS = [0.5, 0.65, 0.8, 1, 1.25, 1.5, 1.75, 2];
+
+function readZoomPreference() {
+  try {
+    const saved = Number(localStorage.getItem("gigapaper:zoom"));
+    return ZOOM_STEPS.includes(saved) ? saved : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function renderZoom() {
+  const pdf = state.currentPaper?.kind !== "markdown";
+  zoomEl.classList.toggle("hidden", !pdf || state.viewMode === "original");
+  zoomLevelEl.textContent = `${Math.round(state.zoom * 100)}%`;
+  const index = ZOOM_STEPS.indexOf(state.zoom);
+  zoomEl.querySelector("[data-zoom=out]").disabled = index <= 0;
+  zoomEl.querySelector("[data-zoom=in]").disabled = index >= ZOOM_STEPS.length - 1;
+}
+
+async function stepZoom(direction) {
+  const next = ZOOM_STEPS[ZOOM_STEPS.indexOf(state.zoom) + (direction === "in" ? 1 : -1)];
+  if (next === undefined) return;
+  state.zoom = next;
+  try {
+    localStorage.setItem("gigapaper:zoom", String(next));
+  } catch {
+    // storage unavailable; the zoom just won't be remembered
+  }
+  renderZoom();
+
+  // Redrawing the pages changes their height, so hold the reader's place across
+  // it rather than letting the paper jump.
+  const here = capturePosition();
+  await state.viewerHandle?.setScale?.(DEFAULT_SCALE * next);
+  if (here) restorePosition(here);
+  scheduleNotesLayout();
+}
+
+/**
+ * Where the reader is, as the page at the top of the viewport plus how far into
+ * that page it has scrolled. Stored that way rather than as a pixel offset so
+ * it survives a zoom, a window resize, and re-rendering the document.
+ */
+function capturePosition() {
+  const top = readingTop();
+  let position = null;
+  for (const wrap of pdfContainer.querySelectorAll(".pdf-page-wrap")) {
+    const box = wrap.getBoundingClientRect();
+    if (box.top > top) break; // this page starts below the fold; the previous one holds
+    position = {
+      page: Number(wrap.dataset.pageNumber),
+      offset: Math.min(Math.max((top - box.top) / box.height, 0), 1),
+    };
+  }
+  // Above the first page (the toolbar is in view): the top of page one.
+  return position ?? (pdfContainer.firstElementChild ? { page: 1, offset: 0 } : null);
+}
+
+function restorePosition({ page, offset }) {
+  const wrap = pdfContainer.querySelector(`.pdf-page-wrap[data-page-number="${page}"]`);
+  if (!wrap) return false;
+  const box = wrap.getBoundingClientRect();
+  mainEl.scrollTop += box.top - readingTop() + offset * box.height;
+  return true;
+}
+
+// The first line of paper you can actually read: the toolbar is sticky, so the
+// top of the scroll box is behind it.
+function readingTop() {
+  const toolbar = document.getElementById("viewer-toolbar").getBoundingClientRect();
+  return Math.max(toolbar.bottom, mainEl.getBoundingClientRect().top);
+}
+
+let saveTimer = null;
+function schedulePositionSave() {
+  // Nothing to record until the stored position has been applied — the view
+  // switch itself scrolls, and that would overwrite it with the top of page one.
+  if (!state.currentPaper || state.pendingRestore || state.viewMode !== "reader") return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(savePosition, 600);
+}
+
+function savePosition() {
+  clearTimeout(saveTimer);
+  const paper = state.currentPaper;
+  const here = paper && !state.pendingRestore ? capturePosition() : null;
+  if (!here) return;
+  paper.last_page = here.page;
+  paper.last_offset = here.offset;
+  api.savePosition(paper.id, here.page, here.offset).catch(() => {});
+}
+
+mainEl.addEventListener("scroll", schedulePositionSave, { passive: true });
+
+// A long document reaches the stored page seconds after it opens. If the reader
+// has already started somewhere else by then, they have chosen a place — don't
+// haul them off it.
+for (const event of ["wheel", "mousedown", "keydown", "touchstart"]) {
+  window.addEventListener(event, () => { state.pendingRestore = null; }, { passive: true });
 }
 
 const NOTE_GAP = 8;
@@ -321,6 +435,7 @@ function makePaperItem(paper) {
     .join("");
   const isArticle = paper.kind === "markdown";
   li.innerHTML = `<div class="paper-thumb${isArticle ? " article" : ""}"><img alt="" /><div class="thumb-text"></div></div>` +
+    `<button class="paper-rename" title="Rename paper">✎</button>` +
     `<button class="paper-delete" title="Delete paper">✕</button>` +
     `<div class="paper-meta"><span class="paper-title"></span>` +
     `<span class="label paper-source"></span>` +
@@ -331,6 +446,7 @@ function makePaperItem(paper) {
   li.querySelector(".paper-source").textContent = isArticle ? hostOf(paper.source_url) : "PDF";
   li.classList.toggle("read", paper.read_at != null);
   li.querySelector(".paper-delete").addEventListener("click", () => deletePaper(paper));
+  li.querySelector(".paper-rename").addEventListener("click", () => renamePaper(paper));
   const thumb = li.querySelector(".paper-thumb");
   thumb.addEventListener("click", () => openPaper(paper));
   li.querySelector("span.paper-title").addEventListener("click", () => openPaper(paper));
@@ -409,6 +525,14 @@ function hostOf(url) {
   }
 }
 
+async function renamePaper(paper) {
+  const title = await showPrompt("Rename paper", paper.title);
+  if (!title || title === paper.title) return;
+  await api.renamePaper(paper.id, title);
+  if (state.currentPaper?.id === paper.id) viewerTitleEl.textContent = title;
+  await refreshPapers();
+}
+
 async function deletePaper(paper) {
   const ok = await showConfirm(`Delete "${paper.title}"? This also removes its highlights.`);
   if (!ok) return;
@@ -439,19 +563,25 @@ async function openPaper(paper) {
 
   clearOriginalView();
   viewModeEl.classList.toggle("hidden", !(paper.source_url && canFrame(paper.source_url)));
+  renderZoom();
 
+  // Pick reading up where it was left. Held until the page it names has
+  // rendered, which is also what keeps the scroll from being saved over.
+  state.pendingRestore = paper.last_page ? { page: paper.last_page, offset: paper.last_offset ?? 0 } : null;
+  mainEl.scrollTop = 0;
+
+  const options = { onSelect: onTextSelected, highlights: pendingHighlights, onPageReady };
   if (paper.kind === "markdown") {
-    state.viewerHandle = renderArticle(
-      pdfContainer, api.paperHtmlUrl(paper.id), onTextSelected, pendingHighlights
-    );
+    state.viewerHandle = renderArticle(pdfContainer, api.paperHtmlUrl(paper.id), options);
     if (paper.source_url) {
       viewerSourceEl.textContent = hostOf(paper.source_url);
       viewerSourceEl.href = paper.source_url;
     }
   } else {
-    state.viewerHandle = renderPdf(
-      pdfContainer, api.paperFileUrl(paper.id), onTextSelected, pendingHighlights
-    );
+    state.viewerHandle = renderPdf(pdfContainer, api.paperFileUrl(paper.id), {
+      ...options,
+      scale: DEFAULT_SCALE * state.zoom,
+    });
   }
 
   try {
@@ -461,7 +591,22 @@ async function openPaper(paper) {
     if (paper.kind !== "markdown") viewerPagesEl.textContent = `${numPages} pages`;
   } catch (error) {
     if (state.currentPaper === paper) await showAlert(error.message);
+  } finally {
+    // A stored page past the end of a document (it was replaced, or the file
+    // changed) would otherwise block saving for the rest of the session.
+    if (state.currentPaper === paper) state.pendingRestore = null;
   }
+}
+
+// Each page arrives on screen: place the notes beside it, and if this is the
+// page the reader was last on, scroll there.
+function onPageReady(pageNumber) {
+  const pending = state.pendingRestore;
+  if (pending && pageNumber >= pending.page) {
+    state.pendingRestore = null;
+    restorePosition(pending);
+  }
+  scheduleNotesLayout();
 }
 
 async function refreshHighlights() {
@@ -593,7 +738,9 @@ function positionPopover(anchor) {
     top = above >= POPOVER_MARGIN ? above : window.innerHeight - popover.height - POPOVER_MARGIN;
   }
   left = Math.min(Math.max(left, POPOVER_MARGIN), window.innerWidth - popover.width - POPOVER_MARGIN);
-  top = Math.max(top, POPOVER_MARGIN);
+  // Both edges, not just the top: an anchor that has scrolled off the bottom
+  // would otherwise put "above the anchor" off the bottom of the screen too.
+  top = Math.min(Math.max(top, POPOVER_MARGIN), window.innerHeight - popover.height - POPOVER_MARGIN);
 
   commentPopover.style.left = `${left}px`;
   commentPopover.style.top = `${top}px`;
@@ -650,6 +797,7 @@ async function deleteOpenHighlight() {
 }
 
 function backToList() {
+  savePosition(); // before the pages go away and there is nothing to measure
   viewerView.classList.add("hidden");
   paperListView.classList.remove("hidden");
   closePopover(); // also clears the pending selection and any highlight being edited
@@ -660,6 +808,7 @@ function backToList() {
   state.highlights = [];
   state.currentPaper = null;
   state.viewerHandle = null;
+  state.pendingRestore = null;
 }
 
 document.getElementById("new-folder-btn").addEventListener("click", async () => {
@@ -683,7 +832,8 @@ async function uploadPapers(files) {
   for (const [index, file] of files.entries()) {
     setUploadStatus(files.length > 1 ? `Importing ${index + 1}/${files.length}…` : "Importing…");
     try {
-      await api.uploadPaper(file, state.currentFolderId);
+      const paper = await api.uploadPaper(file, state.currentFolderId);
+      await applyDetectedTitle(paper, file);
     } catch {
       failed.push(file.name);
     }
@@ -692,6 +842,21 @@ async function uploadPapers(files) {
   await refreshPapers();
   if (failed.length > 0) {
     await showAlert(`Could not import ${failed.length} file(s): ${failed.join(", ")}`);
+  }
+}
+
+/**
+ * Names a freshly imported PDF after its own title page. The filename a paper
+ * arrives with is usually the download's — `2504.15278v2` — which makes for a
+ * library you can't read. Failing to find one is not a failed import: the paper
+ * keeps its filename and can be renamed by hand.
+ */
+async function applyDetectedTitle(paper, file) {
+  try {
+    const title = await guessTitle(await file.arrayBuffer());
+    if (title && title !== paper.title) await api.renamePaper(paper.id, title);
+  } catch {
+    // keep the filename
   }
 }
 
@@ -738,6 +903,11 @@ readToggleBtn.addEventListener("click", async () => {
   }
 });
 
+zoomEl.addEventListener("click", (e) => {
+  const direction = e.target.dataset.zoom;
+  if (direction) stepZoom(direction);
+});
+
 viewModeEl.addEventListener("click", (e) => {
   const mode = e.target.dataset.mode;
   if (mode && mode !== state.viewMode) setViewMode(mode);
@@ -766,14 +936,24 @@ document.getElementById("comment-save").addEventListener("click", saveHighlight)
 document.getElementById("comment-cancel").addEventListener("click", closePopover);
 commentDeleteBtn.addEventListener("click", deleteOpenHighlight);
 
-// Keyboard shortcuts, bound to the whole popover so they work wherever focus is.
-commentPopover.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
+/**
+ * Escape backs out one layer at a time: the comment popover if it is open,
+ * otherwise the paper itself. Owned here rather than on the popover so a single
+ * press can't close the popover and leave the paper on its way up.
+ */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || isModalOpen()) return;
+  if (!commentPopover.classList.contains("hidden")) {
     e.preventDefault();
     closePopover();
-    return;
+  } else if (!viewerView.classList.contains("hidden")) {
+    e.preventDefault();
+    backToList();
   }
+});
 
+// Keyboard shortcuts, bound to the whole popover so they work wherever focus is.
+commentPopover.addEventListener("keydown", (e) => {
   // Enter saves; Shift+Enter still starts a new line in the comment.
   if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();

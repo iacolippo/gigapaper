@@ -290,8 +290,18 @@ button:hover, .upload-label:hover { color: var(--text); border-color: var(--sign
   display: flex;
   align-items: center;
   gap: 14px;
-  padding-bottom: 16px;
-  margin-bottom: 24px;
+  /* Stays put while the paper scrolls under it: zoom, notes and the way back
+     to the library have to be reachable from the middle of a document, not
+     only from the top of one. Full-bleed through #main's padding so pages pass
+     underneath rather than beside it. */
+  position: sticky;
+  /* Offsets a sticky box by its margin edge, so the -34px pulling it up through
+     #main's padding has to be given back here or the paper shows above it. */
+  top: -34px;
+  z-index: 5;
+  margin: -34px -40px 24px;
+  padding: 34px 40px 16px;
+  background: var(--ink);
   border-bottom: 1px solid var(--line);
 }
 #viewer-toolbar button { white-space: nowrap; }
@@ -336,7 +346,9 @@ button:hover, .upload-label:hover { color: var(--text); border-color: var(--sign
   position: absolute;
   pointer-events: auto;
   cursor: pointer;
-  mix-blend-mode: multiply;
+  /* No mix-blend-mode: WKWebView claims to support it and then paints an
+     opaque block over the text. The colour is applied translucent instead
+     (see `translucent` in viewer.js), which needs no compositing support. */
 }
 .highlight-rect.has-comment { outline: 1px dashed rgba(0, 0, 0, 0.45); }
 
@@ -414,7 +426,7 @@ button:hover, .upload-label:hover { color: var(--text); border-color: var(--sign
 
 /* ---------- card extras ---------- */
 
-.paper-delete {
+.paper-delete, .paper-rename {
   position: absolute;
   top: 0;
   right: 0;
@@ -432,12 +444,20 @@ button:hover, .upload-label:hover { color: var(--text); border-color: var(--sign
   opacity: 0.45;
   transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
-#paper-list li:hover .paper-delete { opacity: 1; background: rgba(10, 12, 16, 0.85); }
+.paper-rename { right: 26px; }
+#paper-list li:hover .paper-delete,
+#paper-list li:hover .paper-rename { opacity: 1; background: rgba(10, 12, 16, 0.85); }
 .paper-delete:hover, .paper-delete:focus-visible {
   opacity: 1;
   border: none;
   color: #ffffff;
   background: #c0463a;
+}
+.paper-rename:hover, .paper-rename:focus-visible {
+  opacity: 1;
+  border: none;
+  color: #ffffff;
+  background: var(--signal);
 }
 
 .paper-source { display: block; margin-bottom: 7px; }
@@ -571,6 +591,23 @@ button:hover, .upload-label:hover { color: var(--text); border-color: var(--sign
 /* ---------- margin notes ---------- */
 
 .toolbar-spacer { flex: 1; }
+
+/* Zoom: two buttons around a readout, sharing the segmented group's borders. */
+#zoom.hidden { display: none; }
+#zoom-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  border: 1px solid var(--line-strong);
+  border-right-width: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}
+#zoom button:disabled { opacity: 0.4; cursor: default; }
+#zoom button:disabled:hover { color: var(--muted); border-color: var(--line-strong); }
+
 #notes-toggle { display: inline-flex; align-items: center; gap: 9px; }
 #notes-toggle[aria-pressed="true"] { color: var(--text); border-color: var(--signal); }
 

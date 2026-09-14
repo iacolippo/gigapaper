@@ -36,13 +36,18 @@
       </div>
       <div id="viewer-view" class="hidden">
         <div id="viewer-toolbar">
-          <button id="back-btn">&larr; Library</button>
+          <button id="back-btn" title="Back to the library (Esc)">&larr; Library</button>
           <span id="viewer-title"></span>
           <span id="viewer-pages" class="label"></span>
           <a id="viewer-source" class="label" target="_blank" rel="noopener noreferrer"></a>
           <div id="view-mode" class="segmented hidden" role="group" aria-label="View mode">
             <button data-mode="reader" aria-pressed="true">Reader</button>
             <button data-mode="original" aria-pressed="false">Original</button>
+          </div>
+          <div id="zoom" class="segmented" role="group" aria-label="Zoom">
+            <button data-zoom="out" title="Zoom out">&minus;</button>
+            <span id="zoom-level" class="label" aria-live="polite">100%</span>
+            <button data-zoom="in" title="Zoom in">+</button>
           </div>
           <span class="toolbar-spacer"></span>
           <button id="notes-toggle" aria-pressed="false"><span class="switch" aria-hidden="true"></span>View highlights</button>

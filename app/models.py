@@ -33,6 +33,11 @@ class Paper(Base):
     uploaded_at: Mapped[datetime] = mapped_column(default=_utcnow)
     # Null until the paper is marked read; holds when that happened.
     read_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # Where reading left off: the page at the top of the viewport, and how far
+    # into that page it had scrolled (0-1). Kept as a page rather than a pixel
+    # offset so it survives a change of zoom. Null until the paper is opened.
+    last_page: Mapped[int | None] = mapped_column(nullable=True)
+    last_offset: Mapped[float | None] = mapped_column(nullable=True)
 
     folder: Mapped["Folder | None"] = relationship(back_populates="papers")
     highlights: Mapped[list["Highlight"]] = relationship(

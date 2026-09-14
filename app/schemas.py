@@ -23,6 +23,10 @@ class PaperUpdate(BaseModel):
     folder_id: int | None = None
     title: str | None = None
     read: bool | None = None
+    # Written as a pair: the page at the top of the viewport, and how far into
+    # it the reader had scrolled.
+    last_page: int | None = None
+    last_offset: float | None = None
 
 
 class PaperImport(BaseModel):
@@ -41,6 +45,8 @@ class PaperOut(BaseModel):
     folder_id: int | None
     uploaded_at: datetime
     read_at: datetime | None
+    last_page: int | None
+    last_offset: float | None
 
 
 class Rect(BaseModel):

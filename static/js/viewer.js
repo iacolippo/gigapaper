@@ -1,20 +1,23 @@
-import * as pdfjsLib from "./vendor/pdf.min.mjs";
+import { pdfjsLib } from "./pdfjs.js";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/js/vendor/pdf.worker.min.mjs";
-
-const SCALE = 1.4;
+export const DEFAULT_SCALE = 1.4;
 
 /**
  * Renders a PDF into `container` and wires up highlight creation/rendering.
- * `onSelect(pageNumber, rects, text, pageElement)` fires when the user finishes
- * a text selection; `pageElement` is the page it happened on.
- * `pendingHighlights` is an in-flight fetch: pass it so highlights can be
- * painted page by page instead of waiting for the whole document.
- * Returns { numPages, renderHighlights(highlights) }.
+ *
+ * Options:
+ *   onSelect(pageNumber, rects, text, pageElement) — a finished text selection.
+ *   highlights — an in-flight fetch; pass it so highlights can be painted page
+ *     by page instead of waiting for the whole document.
+ *   onPageReady(pageNumber) — that page is on screen and can be scrolled to.
+ *   scale — starting zoom.
+ *
+ * Returns { rendering, renderHighlights(highlights), setScale(scale) }.
  */
-export function renderPdf(container, url, onSelect, pendingHighlights = null) {
+export function renderPdf(container, url, { onSelect, highlights = null, onPageReady, scale = DEFAULT_SCALE } = {}) {
   container.innerHTML = "";
   const pageLayers = new Map();
+  const pages = new Map(); // pageNumber -> the elements to redraw on a zoom
   let byPage = new Map();
 
   // On the container, not on each page: a selection dragged across a page break
@@ -36,9 +39,9 @@ export function renderPdf(container, url, onSelect, pendingHighlights = null) {
 
   // The highlight fetch runs alongside the document load. Whichever finishes
   // first, each page gets its highlights the moment both exist.
-  Promise.resolve(pendingHighlights ?? [])
-    .then((highlights) => {
-      byPage = groupByPage(highlights);
+  Promise.resolve(highlights ?? [])
+    .then((fetched) => {
+      byPage = groupByPage(fetched);
       paintAll();
     })
     .catch(() => {});
@@ -48,18 +51,34 @@ export function renderPdf(container, url, onSelect, pendingHighlights = null) {
   const rendering = (async () => {
     const pdf = await pdfjsLib.getDocument(url).promise;
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
-      const layer = await renderPage(pdf, pageNumber, container);
-      pageLayers.set(pageNumber, layer);
+      const parts = await createPage(pdf, pageNumber, container);
+      pages.set(pageNumber, parts);
+      pageLayers.set(pageNumber, makeHighlightLayer(parts.highlightLayer));
+      await drawPage(parts, scale);
       paintPage(pageNumber);
+      onPageReady?.(pageNumber);
     }
     return pdf.numPages;
   })();
 
+  // Zooming redraws pages that already exist, so it has to queue behind the
+  // first render rather than fight it for the same canvases.
+  let work = rendering;
+
   return {
     rendering,
-    renderHighlights(highlights) {
-      byPage = groupByPage(highlights);
+    renderHighlights(fetched) {
+      byPage = groupByPage(fetched);
       paintAll();
+    },
+    // Highlight rects are stored as percentages of their page, so the highlight
+    // layers need no redrawing here — they scale with the page they sit in.
+    setScale(next) {
+      scale = next;
+      work = work.then(async () => {
+        for (const parts of pages.values()) await drawPage(parts, scale);
+      });
+      return work;
     },
   };
 }
@@ -88,40 +107,49 @@ function groupByPage(highlights) {
   return byPage;
 }
 
-async function renderPage(pdf, pageNumber, container) {
+/** Builds a page's empty scaffolding; `drawPage` fills it at a given zoom. */
+async function createPage(pdf, pageNumber, container) {
   const page = await pdf.getPage(pageNumber);
-  const viewport = page.getViewport({ scale: SCALE });
 
   const wrap = document.createElement("div");
   wrap.className = "pdf-page-wrap";
   wrap.dataset.pageNumber = String(pageNumber);
-  wrap.style.width = `${viewport.width}px`;
-  wrap.style.height = `${viewport.height}px`;
-  // PDF.js sizes the text layer and every span with
-  // `calc(var(--scale-factor) * ...)`. Without this the calc is invalid, the
-  // layer collapses to zero width, and its clipped spans can't be selected.
-  wrap.style.setProperty("--scale-factor", String(SCALE));
   container.appendChild(wrap);
 
   const canvas = document.createElement("canvas");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
   wrap.appendChild(canvas);
-  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
 
   const textLayerDiv = document.createElement("div");
   textLayerDiv.className = "textLayer";
-  textLayerDiv.style.width = `${viewport.width}px`;
-  textLayerDiv.style.height = `${viewport.height}px`;
   wrap.appendChild(textLayerDiv);
-  const textContent = await page.getTextContent();
-  await new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayerDiv, viewport }).render();
 
   const highlightLayer = document.createElement("div");
   highlightLayer.className = "highlight-layer";
   wrap.appendChild(highlightLayer);
 
-  return makeHighlightLayer(highlightLayer);
+  return { page, wrap, canvas, textLayerDiv, highlightLayer };
+}
+
+/** (Re)paints one page at `scale`. Called again for every zoom change. */
+async function drawPage({ page, wrap, canvas, textLayerDiv }, scale) {
+  const viewport = page.getViewport({ scale });
+
+  wrap.style.width = `${viewport.width}px`;
+  wrap.style.height = `${viewport.height}px`;
+  // PDF.js sizes the text layer and every span with
+  // `calc(var(--scale-factor) * ...)`. Without this the calc is invalid, the
+  // layer collapses to zero width, and its clipped spans can't be selected.
+  wrap.style.setProperty("--scale-factor", String(scale));
+
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+
+  textLayerDiv.innerHTML = ""; // a zoom re-lays every span out at the new size
+  textLayerDiv.style.width = `${viewport.width}px`;
+  textLayerDiv.style.height = `${viewport.height}px`;
+  const textContent = await page.getTextContent();
+  await new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayerDiv, viewport }).render();
 }
 
 /**
@@ -130,13 +158,13 @@ async function renderPage(pdf, pageNumber, container) {
  * purpose: highlight rects are stored as percentages of the page, and a
  * reflowing column would move them.
  */
-export function renderArticle(container, url, onSelect, pendingHighlights = null) {
+export function renderArticle(container, url, { onSelect, highlights = null, onPageReady } = {}) {
   container.innerHTML = "";
   let layer = null;
   let current = [];
 
-  const paint = (highlights) => {
-    current = highlights;
+  const paint = (fetched) => {
+    current = fetched;
     if (!layer) return; // the page is still loading; painted on arrival
     layer.clearHighlights();
     for (const h of current) layer.addHighlight(h, h.rects);
@@ -165,12 +193,15 @@ export function renderArticle(container, url, onSelect, pendingHighlights = null
 
     layer = makeHighlightLayer(highlightLayer);
     paint(current);
+    onPageReady?.(1);
     return 1;
   })();
 
-  Promise.resolve(pendingHighlights ?? []).then(paint).catch(() => {});
+  Promise.resolve(highlights ?? []).then(paint).catch(() => {});
 
-  return { rendering, renderHighlights: paint };
+  // An article has no zoom of its own: it is already laid out as a column of
+  // body text at a comfortable measure.
+  return { rendering, renderHighlights: paint, setScale: null };
 }
 
 /**
@@ -247,6 +278,32 @@ function toPercentRect(rect, wrapRect) {
   };
 }
 
+// How much of the stored colour to keep when painting it over the text. Enough
+// to read as a highlight, light enough to read the words through.
+const HIGHLIGHT_ALPHA = 0.45;
+
+/**
+ * The stored colour, made see-through.
+ *
+ * A highlight sits on top of the words: on a PDF the glyphs are pixels on the
+ * canvas underneath, and on an article they are text underneath. Painting the
+ * colour at full strength therefore hides what it highlights. `mix-blend-mode:
+ * multiply` used to solve that, but WKWebView — the engine behind the desktop
+ * app — reports support for it and then composites it as an opaque block,
+ * burying the text. Translucency needs no blending and looks the same in every
+ * engine.
+ *
+ * Unrecognised colour formats are passed through untouched: a highlight that
+ * is too strong beats one that does not paint at all.
+ */
+function translucent(color) {
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(color?.trim() ?? "");
+  if (!hex) return color;
+  const digits = hex[1].length === 3 ? [...hex[1]].map((d) => d + d) : hex[1].match(/../g);
+  const [r, g, b] = digits.map((pair) => parseInt(pair, 16));
+  return `rgba(${r}, ${g}, ${b}, ${HIGHLIGHT_ALPHA})`;
+}
+
 function makeHighlightLayer(highlightLayer) {
   return {
     clearHighlights() {
@@ -261,7 +318,7 @@ function makeHighlightLayer(highlightLayer) {
         div.style.top = `${rect.y}%`;
         div.style.width = `${rect.width}%`;
         div.style.height = `${rect.height}%`;
-        div.style.background = highlight.color;
+        div.style.background = translucent(highlight.color);
         div.title = highlight.comments?.length
           ? highlight.comments.map((c) => c.body).join("\n\n")
           : highlight.selected_text;

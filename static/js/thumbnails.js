@@ -1,6 +1,4 @@
-import * as pdfjsLib from "./vendor/pdf.min.mjs";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/js/vendor/pdf.worker.min.mjs";
+import { pdfjsLib } from "./pdfjs.js";
 
 const CACHE_PREFIX = "gigapaper:thumb:";
 const WIDTH = 384; // 2x the ~192px card content width, for retina

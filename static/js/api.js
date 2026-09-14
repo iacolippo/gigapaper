@@ -39,6 +39,18 @@ export const api = {
       headers: jsonHeaders(),
       body: JSON.stringify({ folder_id: folderId }),
     }),
+  renamePaper: (id, title) =>
+    request(`/api/papers/${id}`, {
+      method: "PATCH",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ title }),
+    }),
+  savePosition: (id, page, offset) =>
+    request(`/api/papers/${id}`, {
+      method: "PATCH",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ last_page: page, last_offset: offset }),
+    }),
   setPaperRead: (id, read) =>
     request(`/api/papers/${id}`, {
       method: "PATCH",
