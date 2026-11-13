@@ -10,7 +10,12 @@
     <aside id="sidebar">
       <div class="sidebar-header">
         <h1>gigapaper</h1>
-        <button id="new-folder-btn" title="New folder">+ Folder</button>
+        <div class="sidebar-header-actions">
+          <button id="new-folder-btn" title="New folder">+ Folder</button>
+          <button id="sidebar-toggle" aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+        </div>
       </div>
       <ul id="folder-list"></ul>
       <div class="sidebar-actions">

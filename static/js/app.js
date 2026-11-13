@@ -30,6 +30,8 @@ const notesToggleBtn = document.getElementById("notes-toggle");
 const readToggleBtn = document.getElementById("read-toggle");
 const readToggleTextEl = document.getElementById("read-toggle-text");
 const mainEl = document.getElementById("main");
+const sidebarEl = document.getElementById("sidebar");
+const sidebarToggleBtn = document.getElementById("sidebar-toggle");
 const zoomEl = document.getElementById("zoom");
 const zoomLevelEl = document.getElementById("zoom-level");
 
@@ -39,6 +41,7 @@ const state = {
   viewerHandle: null, notesVisible: readNotesPreference(),
   paperFilter: readFilterPreference(), viewMode: "reader",
   zoom: readZoomPreference(), pendingRestore: null,
+  sidebarFolded: readSidebarPreference(),
 };
 
 /**
@@ -94,6 +97,27 @@ function clearOriginalView() {
   pdfContainer.classList.remove("hidden");
   viewModeEl.classList.add("hidden");
   state.viewMode = "reader";
+}
+
+function readSidebarPreference() {
+  try {
+    return localStorage.getItem("gigapaper:sidebar") === "folded";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The rail folds only while a paper is open: the library needs its folder list,
+ * so the remembered choice waits for the reader to be on screen.
+ */
+function renderSidebar() {
+  const reading = !viewerView.classList.contains("hidden");
+  const folded = reading && state.sidebarFolded;
+  sidebarEl.classList.toggle("folded", folded);
+  sidebarToggleBtn.classList.toggle("hidden", !reading);
+  sidebarToggleBtn.setAttribute("aria-expanded", String(!folded));
+  sidebarToggleBtn.title = folded ? "Expand sidebar" : "Collapse sidebar";
 }
 
 function readFilterPreference() {
@@ -545,6 +569,7 @@ async function openPaper(paper) {
   state.currentPaper = paper;
   paperListView.classList.add("hidden");
   viewerView.classList.remove("hidden");
+  renderSidebar();
   viewerTitleEl.textContent = paper.title;
   renderReadToggle();
   viewerPagesEl.textContent = "";
@@ -800,6 +825,7 @@ function backToList() {
   savePosition(); // before the pages go away and there is nothing to measure
   viewerView.classList.add("hidden");
   paperListView.classList.remove("hidden");
+  renderSidebar();
   closePopover(); // also clears the pending selection and any highlight being edited
   clearOriginalView();
   notesObserver.unobserve(pdfContainer);
@@ -931,6 +957,16 @@ notesToggleBtn.addEventListener("click", () => {
   renderNotes();
 });
 
+sidebarToggleBtn.addEventListener("click", () => {
+  state.sidebarFolded = !state.sidebarFolded;
+  try {
+    localStorage.setItem("gigapaper:sidebar", state.sidebarFolded ? "folded" : "open");
+  } catch {
+    // storage unavailable; the fold just won't be remembered
+  }
+  renderSidebar();
+});
+
 document.getElementById("back-btn").addEventListener("click", backToList);
 document.getElementById("comment-save").addEventListener("click", saveHighlight);
 document.getElementById("comment-cancel").addEventListener("click", closePopover);
@@ -972,5 +1008,6 @@ commentPopover.addEventListener("keydown", (e) => {
 });
 
 renderNotes(); // reflect the remembered toggle state before anything is open
+renderSidebar(); // the library opens with the full rail and no collapse toggle
 await refreshFolders();
 await refreshPapers();
